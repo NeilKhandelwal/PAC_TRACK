@@ -1,0 +1,30 @@
+"use client";
+import { useEffect, useState } from "react";
+import { db } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
+
+export default function RacePage({ params }: { params: { race: string } }) {
+  const [data, setData] = useState<any>(null);
+  useEffect(() => { (async () => {
+    const snap = await getDoc(doc(db, "races", decodeURIComponent(params.race)));
+    if (snap.exists()) setData(snap.data());
+  })(); }, [params.race]);
+
+  if (!data) return <div>Loading…</div>;
+  const mix = data.channel_mix || {};
+  return (
+    <main style={{ padding: 24 }}>
+      <h1>Race {data.race}</h1>
+      <p>Cost of contest: ${data.cost_of_contest?.toLocaleString()}</p>
+      <p>Support: ${data.support_amount?.toLocaleString()} • Oppose: ${data.oppose_amount?.toLocaleString()}</p>
+      <p>Support ratio: {(data.support_ratio * 100).toFixed(1)}%</p>
+      <h3>Channel mix</h3>
+      <ul>
+        {Object.entries(mix).map(([k,v]) => (
+          <li key={k}>{k.replace("pct_","")}: {(Number(v)*100).toFixed(1)}%</li>
+        ))}
+      </ul>
+      <small>Updated {new Date(data.last_updated).toLocaleString()}</small>
+    </main>
+  );
+}

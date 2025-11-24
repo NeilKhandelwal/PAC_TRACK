@@ -1,0 +1,561 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>PAC Track – Candidates</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      margin: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+    }
+
+    .muted {
+      color: #666;
+      font-size: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin: 10px 0 14px;
+    }
+
+    input[type="text"] {
+      padding: 8px 10px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      width: 320px;
+    }
+
+    .btn {
+      padding: 8px 10px;
+      border: 1px solid #ddd;
+      background: white;
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 10px 8px;
+      border-bottom: 1px solid #eee;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #fafafa;
+      position: sticky;
+      top: 0;
+    }
+
+    tr:hover {
+      background: #f7fbff;
+      cursor: pointer;
+    }
+
+    .pill {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #eef;
+    }
+
+    .detail {
+      margin-top: 20px;
+      padding: 16px;
+      border: 1px solid #eee;
+      border-radius: 12px;
+      background: #fcfcff;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .tab {
+      padding: 10px 20px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      font-weight: 500;
+      color: #666;
+    }
+
+    .tab.active {
+      border-bottom-color: #000;
+      color: #000;
+    }
+
+    .view {
+      display: none;
+    }
+
+    .view.active {
+      display: block;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>PAC Track <span
+      style="font-size: 12px; background: #eee; padding: 2px 6px; border-radius: 4px; vertical-align: middle;">v2.1 (PAC
+      Breakdowns)</span></h1>
+  <div class="muted" id="meta">Loading meta…</div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="candidates">Candidates</div>
+    <div class="tab" data-tab="operating">Operating Expenditures</div>
+  </div>
+
+  <div class="toolbar">
+    <input id="q" type="text" placeholder="Filter..." />
+    <button id="reload" class="btn">Reload</button>
+    <span id="count" class="muted"></span>
+  </div>
+
+  <!-- RACES VIEW REMOVED -->
+
+  <!-- CANDIDATES VIEW -->
+  <div id="view-candidates" class="view active">
+    <table id="tbl-candidates">
+      <thead>
+        <tr>
+          <th>Candidate</th>
+          <th>Office</th>
+          <th>District/State</th>
+          <th>Total IE</th>
+          <th>Support</th>
+          <th>Oppose</th>
+          <th>Net</th>
+        </tr>
+      </thead>
+      <tbody id="rows-candidates">
+        <tr>
+          <td colspan="7" class="muted">Loading…</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- OPERATING EXPENDITURES VIEW -->
+  <div id="view-operating" class="view">
+    <table id="tbl-operating">
+      <thead>
+        <tr>
+          <th>PAC</th>
+          <th>Category</th>
+          <th>Description</th>
+          <th>Amount</th>
+        </tr>
+      </thead>
+      <tbody id="rows-operating">
+        <tr>
+          <td colspan="4" class="muted">Loading…</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div id="detail" class="detail" style="display:none"></div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-app.js";
+    import {
+      getFirestore, collection, getDocs, query, orderBy, limit, doc, getDoc, where
+    } from "https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore.js";
+
+    // Replace YOUR_API_KEY
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "pactrack-d63e9.firebaseapp.com",
+      projectId: "pactrack-d63e9",
+      storageBucket: "pactrack-d63e9.appspot.com",
+      messagingSenderId: "757956787341",
+      appId: "1:757956787341:web:714ab9d6cd3d653ced36c4",
+      measurementId: "G-WCCKE3YK6W"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    const fmtMoney = n => `$${(n / 1e6).toFixed(1)}M`;
+    const pct = n => (n ?? 0).toLocaleString(undefined, { style: "percent", maximumFractionDigits: 1 });
+
+    // Client-side ID parser (fallback for old records without metadata)
+    function parseCandidateId(candId) {
+      if (!candId || candId.length < 9) return {};
+      const officeCode = candId[0];
+      const officeMap = { "H": "House", "S": "Senate", "P": "Presidential" };
+      const office = officeMap[officeCode] || "Unknown";
+      const state = candId.substring(2, 4);
+      const districtCode = candId.substring(4, 6);
+      let district = null;
+      if (office === "House") {
+        const distNum = parseInt(districtCode, 10);
+        if (!isNaN(distNum)) {
+          district = distNum > 0 ? `${state}-${distNum.toString().padStart(2, '0')}` : `${state}-AL`;
+        }
+      } else if (office === "Senate") {
+        district = state;
+      } else if (office === "Presidential") {
+        district = "National";
+      }
+      return { office, state, district };
+    }
+
+    function parseRaceId(raceId) {
+      if (!raceId || !raceId.includes(":")) return {};
+      const parts = raceId.split(":");
+      if (parts.length < 2) return {};
+      const officeCode = parts[0];
+      const officeMap = { "H": "House", "S": "Senate", "P": "Presidential" };
+      const office = officeMap[officeCode] || "Unknown";
+      const state = parts[1];
+      const districtNum = parts[2];
+      let district = null;
+      if (office === "House" && districtNum) {
+        district = `${state}-${districtNum}`;
+      } else if (office === "Senate") {
+        district = state;
+      } else if (office === "Presidential") {
+        district = "National";
+      }
+      return { office, state, district };
+    }
+
+    const qEl = document.getElementById("q");
+    const reloadBtn = document.getElementById("reload");
+    const metaEl = document.getElementById("meta");
+    const countEl = document.getElementById("count");
+    const detailEl = document.getElementById("detail");
+
+    // State
+    let currentTab = "candidates";
+    let cachedRaces = [];
+    let cachedCandidates = [];
+    let cachedOperating = [];
+
+    // Tabs
+    document.querySelectorAll(".tab").forEach(t => {
+      t.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+        document.querySelectorAll(".view").forEach(x => x.classList.remove("active"));
+        t.classList.add("active");
+        currentTab = t.getAttribute("data-tab");
+        document.getElementById(`view-${currentTab}`).classList.add("active");
+        render();
+      });
+    });
+
+    async function loadMeta() {
+      try {
+        const snap = await getDoc(doc(db, "meta", "app"));
+        if (snap.exists()) {
+          const m = snap.data();
+          metaEl.textContent = `ML: ${m.ml_version ?? "—"} • Updated: ${m.last_updated ? new Date(m.last_updated).toLocaleString() : "—"}`;
+        } else {
+          metaEl.textContent = "—";
+        }
+      } catch (e) {
+        metaEl.textContent = "—";
+      }
+    }
+
+    async function loadData() {
+      detailEl.style.display = "none";
+
+      // Load Races (Background only, tab removed)
+      const qRaces = query(collection(db, "races"), orderBy("cost_of_contest", "desc"), limit(200));
+      getDocs(qRaces).then(snap => {
+        cachedRaces = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      });
+
+      // Load Candidates
+      const qCands = query(collection(db, "candidates"), orderBy("total_ie_amount", "desc"), limit(200));
+      getDocs(qCands).then(snap => {
+        cachedCandidates = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (currentTab === "candidates") render();
+      });
+
+      // Load Operating Expenditures (no orderBy to avoid index requirement)
+      const qOperating = query(collection(db, "expenditure_categories"), limit(500));
+      getDocs(qOperating).then(snap => {
+        cachedOperating = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        // Sort client-side
+        cachedOperating.sort((a, b) => (b.expenditure_amount || 0) - (a.expenditure_amount || 0));
+        if (currentTab === "operating") render();
+      }).catch(err => {
+        console.error("Error loading operating expenditures:", err);
+        document.getElementById("rows-operating").innerHTML = `<tr><td colspan="3" class="muted">Error loading data: ${err.message}</td></tr>`;
+      });
+    }
+
+    function render() {
+      const needle = (qEl.value || "").trim().toLowerCase();
+
+      if (currentTab === "candidates") {
+        renderCandidates(needle);
+      } else if (currentTab === "operating") {
+        renderOperating(needle);
+      }
+    }
+
+    function renderRaces(needle) {
+      const rowsEl = document.getElementById("rows-races");
+      const filtered = !needle ? cachedRaces : cachedRaces.filter(r =>
+        (r.id || "").toLowerCase().includes(needle) ||
+        (r.race || "").toLowerCase().includes(needle) ||
+        (r.race_state || "").toLowerCase().includes(needle) ||
+        (r.race_office || "").toLowerCase().includes(needle) ||
+        (r.candidates || []).some(c => c.toLowerCase().includes(needle))
+      );
+
+      countEl.textContent = `${filtered.length} race(s)`;
+      if (filtered.length === 0) {
+        rowsEl.innerHTML = `<tr><td colspan="8" class="muted">No results.</td></tr>`;
+        return;
+      }
+
+      rowsEl.innerHTML = filtered.map(r => {
+        // Use stored metadata or fallback to parsing ID
+        const metadata = r.office ? r : parseRaceId(r.id || r.race);
+        const office = metadata.office || '—';
+        const district = metadata.district || metadata.state || '—';
+        const officeColor = office === 'House' ? '#e3f2fd' : office === 'Senate' ? '#f3e5f5' : '#fff3e0';
+
+        return `
+        <tr data-id="${r.id}" style="cursor: pointer;">
+          <td>
+            <span class="pill">${r.race ?? r.id}</span>
+            <div class="muted" style="font-size: 10px;">${r.id}</div>
+          </td>
+          <td>
+            <span style="padding: 2px 6px; background: ${officeColor}; border-radius: 4px; font-size: 0.85em;">
+              ${office}
+            </span>
+          </td>
+          <td><b>${district}</b></td>
+          <td>
+            ${(r.candidates && r.candidates.length > 0)
+            ? `<div style="font-size:13px; max-width:200px;">${r.candidates.join(", ")}</div>`
+            : "<span class='muted'>—</span>"}
+          </td>
+          <td>${fmtMoney(r.cost_of_contest)}</td>
+          <td>${fmtMoney(r.support_amount)}</td>
+          <td>${fmtMoney(r.oppose_amount)}</td>
+        </tr>
+      `;
+      }).join("");
+    }
+
+    function renderCandidates(needle) {
+      const rowsEl = document.getElementById("rows-candidates");
+      const filtered = !needle ? cachedCandidates : cachedCandidates.filter(c =>
+        (c.candidate_name || "").toLowerCase().includes(needle) ||
+        (c.candidate_id || "").toLowerCase().includes(needle)
+      );
+
+      countEl.textContent = `${filtered.length} candidate(s)`;
+      if (filtered.length === 0) {
+        rowsEl.innerHTML = `<tr><td colspan="7" class="muted">No results.</td></tr>`;
+        return;
+      }
+
+      rowsEl.innerHTML = filtered.map(c => {
+        // Use stored metadata or fallback to parsing ID
+        const metadata = c.office ? c : parseCandidateId(c.candidate_id);
+        const office = metadata.office || '—';
+        const district = metadata.district || metadata.state_code || '—';
+        const officeColor = office === 'House' ? '#e3f2fd' : office === 'Senate' ? '#f3e5f5' : '#fff3e0';
+
+        return `
+        <tr data-id="${c.candidate_id}" style="cursor: pointer;">
+          <td>
+            <b>${c.candidate_name}</b>
+            <div class="muted" style="font-size: 10px;">${c.candidate_id}</div>
+          </td>
+          <td>
+            <span style="padding: 2px 6px; background: ${officeColor}; border-radius: 4px; font-size: 0.85em;">
+              ${office}
+            </span>
+          </td>
+          <td><b>${district}</b></td>
+          <td>${fmtMoney(c.total_ie_amount)}</td>
+          <td>${fmtMoney(c.support_amount)}</td>
+          <td>${fmtMoney(c.oppose_amount)}</td>
+          <td style="color:${c.net_support_amount >= 0 ? 'green' : 'red'}">${fmtMoney(c.net_support_amount)}</td>
+        </tr>
+      `;
+      }).join("");
+    }
+
+    function renderOperating(needle) {
+      const rowsEl = document.getElementById("rows-operating");
+      const filtered = !needle ? cachedOperating : cachedOperating.filter(o =>
+        (o.pac_name || "").toLowerCase().includes(needle) ||
+        (o.disbursement_description || "").toLowerCase().includes(needle) ||
+        (o.category_bucket || "").toLowerCase().includes(needle)
+      );
+
+      countEl.textContent = `${filtered.length} expenditure(s)`;
+      if (filtered.length === 0) {
+        rowsEl.innerHTML = `<tr><td colspan="4" class="muted">No results.</td></tr>`;
+        return;
+      }
+
+      rowsEl.innerHTML = filtered.map(o => `
+        <tr>
+          <td><b>${o.pac_name}</b></td>
+          <td><span style="padding: 2px 8px; background: #e3f2fd; border-radius: 4px; font-size: 0.9em;">${o.category_bucket || "—"}</span></td>
+          <td>${o.disbursement_description || "—"}</td>
+          <td>${fmtMoney(o.expenditure_amount)}</td>
+        </tr>
+      `).join("");
+    }
+
+    // Helper to render PAC breakdown table with visuals
+    function renderPacBreakdownTable(breakdowns) {
+      if (!breakdowns || breakdowns.length === 0) return "<p class='muted'>No PAC breakdown data available.</p>";
+
+      // Sort by amount desc
+      breakdowns.sort((a, b) => b.expenditure_amount - a.expenditure_amount);
+      const maxAmount = breakdowns[0].expenditure_amount;
+
+      const rows = breakdowns.map(b => {
+        const width = Math.max(1, (b.expenditure_amount / maxAmount) * 100);
+        const isPositive = b.expenditure_amount >= 0;
+        const color = isPositive ? '#4caf50' : '#f44336'; // Green for spending, Red for refunds/negative
+
+        return `
+        <tr>
+          <td style="width: 200px;"><b>${b.pac_name}</b></td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <div style="flex-grow: 1; background: #eee; height: 8px; border-radius: 4px; overflow: hidden;">
+                <div style="width: ${width}%; background: ${color}; height: 100%;"></div>
+              </div>
+              <div style="min-width: 80px; text-align: right; font-family: monospace;">${fmtMoney(b.expenditure_amount)}</div>
+            </div>
+          </td>
+          <td style="text-align: right; width: 60px;">${b.lines ?? 0}</td>
+        </tr>`;
+      }).join('');
+
+      return `
+        <div style="margin-top: 24px; padding: 16px; background: white; border: 1px solid #eee; border-radius: 8px;">
+          <h4 style="margin: 0 0 12px;">PAC Funding Breakdown</h4>
+          <table style="width:100%; border-collapse: collapse;">
+            <thead>
+              <tr style="border-bottom: 2px solid #f0f0f0;">
+                <th style="text-align: left; padding-bottom: 8px;">PAC</th>
+                <th style="text-align: left; padding-bottom: 8px;">Contribution Amount</th>
+                <th style="text-align: right; padding-bottom: 8px;">Txns</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>`;
+    }
+
+    // Helper to render Channel Mix
+    function renderChannelMix(mix) {
+      if (!mix || Object.keys(mix).length === 0) return "";
+
+      // Convert to array and sort
+      const items = Object.entries(mix)
+        .map(([k, v]) => ({
+          label: k.replace("pct_", "").replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()),
+          value: v
+        }))
+        .sort((a, b) => b.value - a.value);
+
+      const rows = items.map(item => `
+        <div style="display: flex; align-items: center; margin-bottom: 6px; font-size: 13px;">
+          <div style="width: 140px;">${item.label}</div>
+          <div style="flex-grow: 1; background: #eee; height: 8px; border-radius: 4px; overflow: hidden;">
+            <div style="width: ${item.value * 100}%; background: #2196f3; height: 100%;"></div>
+          </div>
+          <div style="width: 50px; text-align: right; font-family: monospace;">${(item.value * 100).toFixed(1)}%</div>
+        </div>
+      `).join("");
+
+      return `
+        <div style="margin-top: 24px; padding: 16px; background: white; border: 1px solid #eee; border-radius: 8px;">
+          <h4 style="margin: 0 0 12px;">Spending Channel Mix</h4>
+          ${rows}
+        </div>
+      `;
+    }
+
+    // Detail display function
+    async function showDetail(collectionName, docId) {
+      try {
+        const snap = await getDoc(doc(db, collectionName, docId));
+        if (!snap.exists()) {
+          detailEl.style.display = "block";
+          detailEl.innerHTML = `<b>${docId}</b><div class="muted">Document not found.</div>`;
+          return;
+        }
+        const data = snap.data();
+        let extraHtml = "";
+
+        if (collectionName === "candidates") {
+          const q = query(collection(db, "candidate_pac_breakdown"), where("candidate_id", "==", docId));
+          const breakdownSnap = await getDocs(q);
+          const breakdowns = breakdownSnap.docs.map(d => d.data());
+          extraHtml = renderChannelMix(data.channel_mix) + renderPacBreakdownTable(breakdowns);
+        } else if (collectionName === "races") {
+          const q = query(collection(db, "race_pac_breakdown"), where("race", "==", docId));
+          const breakdownSnap = await getDocs(q);
+          const breakdowns = breakdownSnap.docs.map(d => d.data());
+          extraHtml = renderPacBreakdownTable(breakdowns);
+        }
+
+        detailEl.style.display = "block";
+        detailEl.innerHTML = `
+          <h3>${collectionName === 'races' ? (data.race ?? docId) : (data.candidate_name ?? docId)}</h3>
+          <pre>${JSON.stringify(data, null, 2)}</pre>
+          ${extraHtml}
+        `;
+        detailEl.scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (e) {
+        console.error("Error in showDetail:", e);
+        detailEl.innerHTML += `<div style="color:red">Error loading details.</div>`;
+      }
+    };
+
+    qEl.addEventListener("input", render);
+    reloadBtn.addEventListener("click", () => loadData().catch(console.error));
+
+    // Event delegation for row clicks (Races removed)
+
+    document.getElementById("tbl-candidates").addEventListener("click", (e) => {
+      const row = e.target.closest("tr[data-id]");
+      if (row && row.dataset.id) {
+        showDetail("candidates", row.dataset.id);
+      }
+    });
+
+    // Initialize
+    (async () => {
+      await loadMeta();
+      loadData();
+    })();
+  </script>
+</body>
+
+</html>

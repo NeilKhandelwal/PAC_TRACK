@@ -1,0 +1,5 @@
+requests
+pandas
+google-cloud-firestore
+google-auth
+scikit-learn

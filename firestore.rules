@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /races/{doc} { allow read: if true; }        // anyone can read races
+    match /races/{race} {
+      allow read: if true;
+    }
+    match /candidates/{candidate} {
+      allow read: if true;
+    }
+    match /meta/{doc} {
+      allow read: if true;
+    }                                                  // anyone can read metadata
+    match /expenditure_categories/{category} {
+      allow read: if true;
+    }
+    match /pac_spending/{pac} {
+      allow read: if true;
+    }
+    match /spending_buckets/{bucket} {
+      allow read: if true;
+    }
+    match /candidate_pac_breakdown/{doc} {
+      allow read: if true;
+    }
+    match /race_pac_breakdown/{doc} {
+      allow read: if true;
+    }
+  }
+}
